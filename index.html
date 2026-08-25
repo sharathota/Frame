@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cinematic Burgundy — Photo Editor</title>
+<style>
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:#111;color:#eee;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  .app{max-width:1200px;margin:auto;padding:24px}
+  h1{font-size:26px;margin:0 0 5px}
+  .sub{color:#aaa;margin:0 0 20px}
+  .layout{display:grid;grid-template-columns:320px 1fr;gap:20px}
+  .panel{background:#1b1b1b;border:1px solid #333;border-radius:16px;padding:18px}
+  .drop{
+    border:1px dashed #666;border-radius:12px;padding:22px;text-align:center;
+    cursor:pointer;background:#151515;margin-bottom:15px
+  }
+  .drop:hover{border-color:#bbb}
+  input[type=file]{display:none}
+  button{
+    border:0;border-radius:10px;padding:11px 14px;background:#eee;color:#111;
+    cursor:pointer;font-weight:650;margin:4px 3px 4px 0
+  }
+  button.secondary{background:#303030;color:#eee}
+  button.active{background:#c9b08b;color:#111}
+  .presets{margin-bottom:16px}
+  .control{margin:14px 0}
+  .row{display:flex;justify-content:space-between;gap:10px;align-items:center}
+  label{font-size:13px;color:#ccc}
+  output{font-size:12px;color:#aaa}
+  input[type=range]{width:100%;accent-color:#c9b08b}
+  canvas{
+    width:100%;height:auto;display:block;background:#090909;border-radius:12px;
+    max-height:78vh;object-fit:contain
+  }
+  .canvasWrap{position:relative}
+  .empty{padding:100px 20px;text-align:center;color:#777;border:1px dashed #444;border-radius:12px}
+  .small{font-size:11px;color:#777;line-height:1.5}
+  @media(max-width:850px){.layout{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>🎞 Cinematic Burgundy</h1>
+  <p class="sub">Warm editorial / film look — runs locally in your browser.</p>
+
+  <div class="layout">
+    <div class="panel">
+      <label class="drop" for="file">
+        <strong>＋ Choose photo</strong><br>
+        <span class="small">JPG / PNG / WebP — your image stays in your browser</span>
+      </label>
+      <input id="file" type="file" accept="image/*">
+
+      <div class="presets">
+        <label>PRESETS</label><br>
+        <button class="active" data-preset="cinematic">Cinematic</button>
+        <button class="secondary" data-preset="soft">Soft Film</button>
+        <button class="secondary" data-preset="moody">Moody</button>
+        <button class="secondary" data-preset="reset">Original</button>
+      </div>
+
+      <div id="controls"></div>
+
+      <button id="download">⬇ Export JPG</button>
+      <button id="downloadPng" class="secondary">Export PNG</button>
+      <p class="small">Tip: for Instagram, use 4:5 crop in your phone editor after export (1080×1350 works well).</p>
+    </div>
+
+    <div class="panel canvasWrap">
+      <div id="empty" class="empty">Choose a photo to start.</div>
+      <canvas id="canvas" hidden></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+const file = document.getElementById('file');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d', {willReadFrequently:true});
+const empty = document.getElementById('empty');
+let original = null;
+
+const defaults = {
+  exposure: 0.10, contrast: 12, highlights: -35, shadows: 18, whites: -12, blacks: -18,
+  warmth: 7, vibrance: 8, saturation: -4, fade: 4, grain: 10, vignette: 10,
+  burgundy: 12, greenMute: 25, glow: 4
+};
+
+const soft = {...defaults, contrast:5, highlights:-28, shadows:25, blacks:-10, warmth:5, vibrance:4, saturation:-7, fade:7, grain:14, vignette:7, burgundy:7, greenMute:18, glow:8};
+const moody = {...defaults, exposure:-.05, contrast:20, highlights:-42, shadows:5, blacks:-28, warmth:4, vibrance:2, saturation:-8, fade:2, grain:15, vignette:18, burgundy:18, greenMute:35, glow:2};
+
+let settings = {...defaults};
+
+const controls = [
+ ['exposure','Exposure',-1,1,.01],
+ ['contrast','Contrast',-40,40,1],
+ ['highlights','Highlights',-100,50,1],
+ ['shadows','Shadows',-50,70,1],
+ ['whites','Whites',-50,50,1],
+ ['blacks','Blacks',-60,40,1],
+ ['warmth','Warmth',-20,30,1],
+ ['vibrance','Vibrance',-50,50,1],
+ ['saturation','Saturation',-30,30,1],
+ ['burgundy','Burgundy tone',0,35,1],
+ ['greenMute','Mute greens',0,60,1],
+ ['fade','Film fade',0,20,1],
+ ['grain','Film grain',0,30,1],
+ ['vignette','Vignette',0,30,1],
+ ['glow','Highlight glow',0,15,1]
+];
+
+function buildControls(){
+  const box=document.getElementById('controls'); box.innerHTML='';
+  controls.forEach(([key,name,min,max,step])=>{
+    const d=document.createElement('div'); d.className='control';
+    d.innerHTML=`<div class="row"><label>${name}</label><output id="out-${key}"></output></div>
+      <input id="range-${key}" type="range" min="${min}" max="${max}" step="${step}" value="${settings[key]}">`;
+    box.appendChild(d);
+    const r=d.querySelector('input');
+    r.oninput=()=>{settings[key]=Number(r.value); update();};
+  });
+  syncUI();
+}
+function syncUI(){
+  controls.forEach(([key])=>{
+    const r=document.getElementById('range-'+key),o=document.getElementById('out-'+key);
+    if(r){r.value=settings[key];o.textContent=settings[key];}
+  });
+}
+function clamp(v){return Math.max(0,Math.min(255,v))}
+function applyPixel(r,g,b,a,s){
+  // Exposure
+  let f=Math.pow(2,s.exposure); r*=f; g*=f; b*=f;
+
+  // Contrast around middle gray
+  const c=(100+s.contrast)/100; r=(r-128)*c+128; g=(g-128)*c+128; b=(b-128)*c+128;
+
+  // Highlights/shadows using luminance weights
+  const lum=.2126*r+.7152*g+.0722*b;
+  const sh=Math.max(0,1-lum/150), hi=Math.max(0,(lum-105)/150);
+  r += s.shadows*sh + s.highlights*hi;
+  g += s.shadows*sh + s.highlights*hi;
+  b += s.shadows*sh + s.highlights*hi;
+
+  // Whites/blacks
+  r += s.whites*Math.max(0,(lum-170)/85) + s.blacks*Math.max(0,(90-lum)/90);
+  g += s.whites*Math.max(0,(lum-170)/85) + s.blacks*Math.max(0,(90-lum)/90);
+  b += s.whites*Math.max(0,(lum-170)/85) + s.blacks*Math.max(0,(90-lum)/90);
+
+  // Warm cinematic split: warm highlights, subtle cool shadows
+  const hiW=Math.max(0,(lum-105)/150), shW=Math.max(0,(105-lum)/105);
+  r += s.warmth*(1.2*hiW);
+  g += s.warmth*(0.45*hiW);
+  b -= s.warmth*(0.45*hiW);
+  b += s.warmth*.10*shW;
+  r -= s.warmth*.05*shW;
+
+  // Muted greens/yellows
+  const max=Math.max(r,g,b), min=Math.min(r,g,b);
+  if(max-min>12 && g>=r*.82 && g>=b*.92){
+    const m=1-s.greenMute/100;
+    g=128+(g-128)*m;
+    r*=1+s.greenMute*.0015;
+  }
+
+  // Burgundy/maroon bias in darker reds
+  if(r>g*1.12 && r>b*1.10){
+    const amount=s.burgundy/100;
+    b += (r-b)*amount*.22;
+    g -= (g*.06*amount);
+  }
+
+  // Saturation / vibrance
+  const L=.2126*r+.7152*g+.0722*b;
+  let sat=1+s.saturation/100;
+  sat*=1+(s.vibrance/100)*(.65+(1-Math.min(1,Math.abs(L-128)/128))*.35);
+  r=L+(r-L)*sat; g=L+(g-L)*sat; b=L+(b-L)*sat;
+
+  // Gentle film fade
+  const fade=s.fade/100;
+  r=r*(1-fade)+18*fade; g=g*(1-fade)+18*fade; b=b*(1-fade)+18*fade;
+
+  return [clamp(r),clamp(g),clamp(b),a];
+}
+
+function update(){
+  if(!original)return;
+  const W=original.width,H=original.height;
+  canvas.width=W; canvas.height=H;
+  ctx.drawImage(original,0,0);
+  const img=ctx.getImageData(0,0,W,H), d=img.data;
+  for(let i=0;i<d.length;i+=4){
+    let p=applyPixel(d[i],d[i+1],d[i+2],d[i+3],settings);
+    d[i]=p[0];d[i+1]=p[1];d[i+2]=p[2];
+  }
+  ctx.putImageData(img,0,0);
+
+  // Overlay effects
+  const grad=ctx.createRadialGradient(W*.50,H*.38,Math.min(W,H)*.05,W*.50,H*.45,Math.max(W,H)*.72);
+  grad.addColorStop(0,'rgba(255,190,120,'+(settings.glow/100)+')');
+  grad.addColorStop(.55,'rgba(255,170,90,0)');
+  grad.addColorStop(1,'rgba(0,0,0,'+(settings.vignette/100)+')');
+  ctx.fillStyle=grad;ctx.fillRect(0,0,W,H);
+
+  // Fine grain
+  if(settings.grain>0){
+    const g=ctx.getImageData(0,0,W,H), gd=g.data, strength=settings.grain*.42;
+    for(let i=0;i<gd.length;i+=4){
+      const n=(Math.random()-.5)*strength;
+      gd[i]=clamp(gd[i]+n);gd[i+1]=clamp(gd[i+1]+n);gd[i+2]=clamp(gd[i+2]+n);
+    }
+    ctx.putImageData(g,0,0);
+  }
+  syncUI();
+}
+
+file.onchange=e=>{
+  const f=e.target.files[0]; if(!f)return;
+  const img=new Image();
+  img.onload=()=>{original=img;empty.hidden=true;canvas.hidden=false;update();}
+  img.src=URL.createObjectURL(f);
+};
+
+document.querySelectorAll('[data-preset]').forEach(btn=>{
+  btn.onclick=()=>{
+    const p=btn.dataset.preset;
+    settings=p==='soft'?{...soft}:p==='moody'?{...moody}:p==='reset'?{exposure:0,contrast:0,highlights:0,shadows:0,whites:0,blacks:0,warmth:0,vibrance:0,saturation:0,fade:0,grain:0,vignette:0,burgundy:0,greenMute:0,glow:0}:{...defaults};
+    document.querySelectorAll('[data-preset]').forEach(x=>x.classList.toggle('active',x===btn));
+    document.querySelectorAll('[data-preset]').forEach(x=>x.classList.toggle('secondary',x!==btn));
+    syncUI();update();
+  };
+});
+
+function download(type){
+  if(!original)return alert('Choose a photo first.');
+  const a=document.createElement('a');
+  a.download='cinematic-burgundy.'+(type==='png'?'png':'jpg');
+  a.href=canvas.toDataURL(type==='png'?'image/png':'image/jpeg',.94);
+  a.click();
+}
+document.getElementById('download').onclick=()=>download('jpg');
+document.getElementById('downloadPng').onclick=()=>download('png');
+
+buildControls();
+</script>
+</body>
+</html>
